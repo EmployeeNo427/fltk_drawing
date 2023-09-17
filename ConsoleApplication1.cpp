@@ -1,75 +1,157 @@
 // ConsoleApplication1.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
 
 #define WIN32
 
-
 #include <FL/Fl.H>
-#include <FL/Fl_Double_Window.H>
-#include <FL/Fl_Box.H>
-#include <FL/fl_draw.H>
-#include <vector>
+#include <FL/Fl_Window.H>
+#include <FL/Fl_Button.H>
+#include <FL/Fl_Value_Slider.H>
+#include <FL/Fl_Gl_Window.H>
+#include <FL/gl.h>
+#include <GL/glu.h>
+#include <chrono> 
+#include <iostream> 
 
-
-class DrawingCanvas : public Fl_Box {
+class MyGLWindow : public Fl_Gl_Window {
 private:
-    int prev_x, prev_y;
-    bool is_drawing;
-
-    struct LineSegment {
-        int x1, y1, x2, y2;
-        LineSegment(int x1, int y1, int x2, int y2) : x1(x1), y1(y1), x2(x2), y2(y2) {}
-    };
-
-    std::vector<LineSegment> lines;
+    double rotationSpeed;
+    bool spinning;
+    double rotationAngle;
+    std::chrono::high_resolution_clock::time_point startTime;  // For timing complete rotations
+    std::chrono::high_resolution_clock::time_point lastUpdateTime;  // For timing between frames
 
 public:
-    DrawingCanvas(int x, int y, int w, int h)
-        : Fl_Box(x, y, w, h), prev_x(0), prev_y(0), is_drawing(false) {
-        box(FL_FLAT_BOX);
-        color(FL_WHITE);
+    MyGLWindow(int X, int Y, int W, int H, const char* L = nullptr)
+        : Fl_Gl_Window(X, Y, W, H, L),
+        rotationSpeed(0.5),
+        spinning(true),
+        rotationAngle(0.0) {
+        mode(FL_RGB | FL_DOUBLE | FL_DEPTH);
+        Fl::add_idle(RotateIdleCB, static_cast<void*>(this));
+
+        // Initialize the start and last update times:
+        startTime = std::chrono::high_resolution_clock::now();
+        lastUpdateTime = startTime;
     }
 
-    void draw() {
-        // First draw the box (our canvas)
-        Fl_Box::draw();
-        // Then draw all the line segments
-        fl_color(FL_BLACK);
-        for (const LineSegment& line : lines) {
-            fl_line(line.x1, line.y1, line.x2, line.y2);
+    void setSpinning(bool s) {
+        spinning = s;
+        if (spinning) {
+            lastUpdateTime = std::chrono::high_resolution_clock::now(); // Reset the time when restarting to avoid sudden jump when resume
+            Fl::add_idle(RotateIdleCB, static_cast<void*>(this));
+        }
+        else {
+            Fl::remove_idle(RotateIdleCB, static_cast<void*>(this));
+        }
+        redraw();
+    }
+
+
+    void setSpeed(double speed) {
+        rotationSpeed = speed;
+        redraw();
+    }
+
+    static void RotateIdleCB(void* data) {
+        auto glWin = static_cast<MyGLWindow*>(data);
+
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        auto timeDelta = std::chrono::duration<double>(currentTime - glWin->lastUpdateTime).count();  // Time elapsed since last update in seconds
+
+        glWin->rotationAngle += glWin->rotationSpeed * timeDelta * 360.0;  // Multiply by timeDelta to account for variable time between frames
+        glWin->lastUpdateTime = currentTime;
+
+        if (glWin->rotationAngle > 360.0) {
+            glWin->rotationAngle -= 360.0;
+
+            // Calculate elapsed time:
+            auto endTime = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - glWin->startTime).count();
+
+            std::cout << "Time taken for one complete rotation: " << elapsed / 1000.0 << " seconds." << std::endl;
+
+            // Reset the start time for the next rotation:
+            glWin->startTime = endTime;
+        }
+
+        if (glWin->spinning) {
+            glWin->redraw();
         }
     }
 
-    int handle(int event) {
-        int cur_x = Fl::event_x();
-        int cur_y = Fl::event_y();
-        switch (event) {
-        case FL_PUSH:
-            prev_x = cur_x;
-            prev_y = cur_y;
-            is_drawing = true;
-            return 1;
-        case FL_DRAG:
-            if (is_drawing) {
-                lines.push_back(LineSegment(prev_x, prev_y, cur_x, cur_y));
-                prev_x = cur_x;
-                prev_y = cur_y;
-                redraw();
-            }
-            return 1;
-        case FL_RELEASE:
-            is_drawing = false;
-            return 1;
+    void draw() override {
+        if (!valid()) {
+            glEnable(GL_DEPTH_TEST);
+            glLoadIdentity();
+            glViewport(0, 0, w(), h());
+            glMatrixMode(GL_PROJECTION);
+            glLoadIdentity();
+            gluPerspective(45.0, w() * 1.0 / h(), 1, 500);
+            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            valid(1);
         }
-        return Fl_Box::handle(event);
+
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glTranslatef(0.f, 0.f, -5.f);
+        glRotated(rotationAngle, 0.0, 1.0, 0.0);
+
+        glBegin(GL_TRIANGLES);
+        glVertex3f(0.f, 1.f, 0.f);
+        glVertex3f(-1.f, -1.f, 0.f);
+        glVertex3f(1.f, -1.f, 0.f);
+        glEnd();
+    }
+
+    bool isSpinning() const {
+        return spinning;
     }
 };
 
-int main() {
-    Fl_Double_Window win(800, 600, "Simple Drawing App with FLTK");
-    DrawingCanvas canvas(10, 10, 780, 580);
-    win.resizable(canvas);
+void StartStopCB(Fl_Widget* w, void* data) {
+    auto glWin = static_cast<MyGLWindow*>(data);
+    if (glWin->isSpinning()) {
+        glWin->setSpinning(false);
+        static_cast<Fl_Button*>(w)->label("Start");
+    }
+    else {
+        glWin->setSpinning(true);
+        static_cast<Fl_Button*>(w)->label("Stop");
+    }
+}
+
+void AdjustSpeedCB(Fl_Widget* w, void* data) {
+    auto glWin = static_cast<MyGLWindow*>(data);
+    double speed = static_cast<Fl_Value_Slider*>(w)->value();
+    glWin->setSpeed(speed);
+}
+
+int main(int argc, char** argv) {
+    Fl_Window win(850, 650, "Spinning Triangle with FLTK");
+
+    MyGLWindow glwin(10, 10, 830, 530);
+    win.resizable(&glwin);
+
+    Fl_Button startStopButton(10, 550, 120, 30, "Stop");
+    startStopButton.callback(StartStopCB, static_cast<void*>(&glwin));
+
+    Fl_Value_Slider speedSlider(150, 550, 690, 30, "Speed");
+    speedSlider.type(FL_HORIZONTAL);
+    speedSlider.range(0.1, 5.0);
+    speedSlider.value(0.5);
+    speedSlider.callback(AdjustSpeedCB, static_cast<void*>(&glwin));
+
     win.end();
-    win.show();
+    win.show(argc, argv);
     return Fl::run();
 }
+
+
+
+
+
+
+
+
